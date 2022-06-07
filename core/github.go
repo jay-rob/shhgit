@@ -20,6 +20,45 @@ const (
 	sleep   = 30 * time.Second
 )
 
+func getOrgRepositories(session *Session) {
+	localCtx, cancel := context.WithCancel(session.Context)
+	defer cancel()
+	opt := &github.RepositoryListByOrgOptions{}
+
+	//observedKeys := map[string]bool{}
+	var client *GitHubClientWrapper
+	for _, org := range session.Config.GithubIncludeOrgs {
+
+		client = session.GetClient()
+
+		repos, resp, err := client.Repositories.ListByOrg(localCtx, org, opt)
+		if err != nil {
+			if _, ok := err.(*github.RateLimitError); ok {
+				session.Log.Warn("Token %s[..] rate limited. Reset at %s", client.Token[:10], resp.Rate.Reset)
+				client.RateLimitedUntil = resp.Rate.Reset.Time
+				session.FreeClient(client)
+				break
+			}
+
+			if _, ok := err.(*github.AbuseRateLimitError); ok {
+				session.Log.Fatal("GitHub API abused detected. Quitting...")
+			}
+
+			session.Log.Warn("Error getting GitHub events: %s... trying again", err)
+		}
+
+		for _, repo := range repos {
+
+			session.Repositories <- GitResource{
+				Id:   *repo.ID,
+				Type: GITHUB_SOURCE,
+				Url:  repo.GetURL(),
+				Ref:  *repo.MasterBranch,
+			}
+		}
+	}
+
+}
 func GetRepositories(session *Session) {
 	localCtx, cancel := context.WithCancel(session.Context)
 	defer cancel()
