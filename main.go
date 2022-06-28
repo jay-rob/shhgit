@@ -39,7 +39,7 @@ func ProcessRepositories() {
 				defer cancel()
 
 				repository := <-session.Repositories
-
+				
 				repo, err := core.GetRepository(session, repository.Id)
 
 				if err != nil {
@@ -219,6 +219,23 @@ func main() {
 			session.Log.Info("[*] No matching secrets found in %s!", color.BlueString(*session.Options.Local))
 		}
 		os.Exit(rc)
+	} else if len(*session.Options.App) > 0 {
+		// if *session.Options.SearchQuery != "" {
+		// 	session.Log.Important("Search Query '%s' given. Only returning matching results.", *session.Options.SearchQuery)
+		// }
+
+		go core.GetInstallationRepositories(session)
+		go ProcessRepositories()
+		// go ProcessComments()
+
+		// if *session.Options.ProcessGists {
+		// 	go core.GetGists(session)
+		// 	go ProcessGists()
+		// }
+
+		spinny := core.ShowSpinner()
+		select {}
+		spinny()
 	} else {
 		if *session.Options.SearchQuery != "" {
 			session.Log.Important("Search Query '%s' given. Only returning matching results.", *session.Options.SearchQuery)

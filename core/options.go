@@ -22,6 +22,7 @@ type Options struct {
 	SearchQuery            *string
 	Local                  *string
 	Live                   *string
+	App                    *string
 	ConfigPath             *string
 }
 
@@ -42,6 +43,7 @@ func ParseOptions() (*Options, error) {
 		SearchQuery:            flag.String("search-query", "", "Specify a search string to ignore signatures and filter on files containing this string (regex compatible)"),
 		Local:                  flag.String("local", "", "Specify local directory (absolute path) which to scan. Scans only given directory recursively. No need to have GitHub tokens with local run."),
 		Live:                   flag.String("live", "", "Your shhgit live endpoint"),
+		App:                    flag.String("app", "", "Your github app id"),
 		ConfigPath:             flag.String("config-path", "", "Searches for config.yaml from given directory. If not set, tries to find if from shhgit binary's and current directory"),
 	}
 

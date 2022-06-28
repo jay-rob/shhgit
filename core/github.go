@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"time"
 
-	"github.com/google/go-github/github"
+	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/google/go-github/v45/github"
+	"golang.org/x/oauth2"
 )
 
 type GitHubClientWrapper struct {
@@ -19,6 +24,103 @@ const (
 	perPage = 300
 	sleep   = 30 * time.Second
 )
+
+// app id 114437
+func GetAppInstallationClients(session *Session) {
+	const gitHost = "https://api.github.com"
+
+	privatePem, err := ioutil.ReadFile("/Users/jasonroberts/workspaces/shhgit/private-key.pem")
+	if err != nil {
+		log.Fatalf("failed to read pem: %v", err)
+	}
+
+	itr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, 113101, privatePem)
+	if err != nil {
+		log.Fatalf("faild to create app transport: %v\n", err)
+	}
+	itr.BaseURL = gitHost
+
+	//create git client with app transport
+	client, err := github.NewEnterpriseClient(
+		gitHost,
+		gitHost,
+		&http.Client{
+			Transport: itr,
+			Timeout:   time.Second * 30,
+		})
+
+	if err != nil {
+		log.Fatalf("faild to create git client for app: %v\n", err)
+	}
+
+	installations, _, err := client.Apps.ListInstallations(context.Background(), &github.ListOptions{})
+	if err != nil {
+		log.Fatalf("failed to list installations: %v\n", err)
+	}
+
+	for _, val := range installations {
+		//val.
+		installID := val.GetID()
+		token, _, err := client.Apps.CreateInstallationToken(
+			context.Background(),
+			installID, &github.InstallationTokenOptions{})
+		if err != nil {
+			log.Fatalf("failed to create installation token: %v\n", err)
+		}
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: token.GetToken()},
+		)
+		oAuthClient := oauth2.NewClient(context.Background(), ts)
+
+		//create new git hub client with accessToken
+		apiClient, err := github.NewEnterpriseClient(gitHost, gitHost, oAuthClient)
+		if err != nil {
+			log.Fatalf("failed to create new git client with token: %v\n", err)
+		}
+		//apiClient.Apps.FindRepositoryInstallationByID()()
+		repos, _, err := apiClient.Apps.ListRepos(context.Background(), &github.ListOptions{PerPage: perPage})
+		//apiClient.Repositories.ListAll(context.Background(), &github.RepositoryListAllOptions{})
+		if err != nil {
+
+			session.Log.Fatal("failed to create new git client with token: %v\n", err)
+
+		}
+		for _, repo := range repos.Repositories {
+			repo.GetDefaultBranch()
+			session.Log.Warn("repo=%v", repo.GetURL())
+			session.Repositories <- GitResource{
+				Id:   *repo.ID,
+				Type: GITHUB_SOURCE,
+				Url:  repo.GetURL(),
+				Ref:  *repo.MasterBranch,
+			}
+		}
+	}
+
+	//session.Log.Warn("%s", token.Repositories)
+}
+
+func GetInstallationRepositories(session *Session) {
+
+	client := session.GetClient()
+	defer session.FreeClient(client)
+	repos, _, err := client.Apps.ListRepos(context.Background(), &github.ListOptions{PerPage: perPage})
+	if err != nil {
+
+		session.Log.Fatal("failed to create new git client with token: %v\n", err)
+
+	}
+	for _, repo := range repos.Repositories {
+		session.Log.Warn("repo=%v", repo.GetURL())
+		session.Repositories <- GitResource{
+			Id:   *repo.ID,
+			Type: GITHUB_SOURCE,
+			Url:  repo.GetURL(),
+			Ref:  repo.GetDefaultBranch(),
+		}
+	}
+
+}
 
 func getOrgRepositories(session *Session) {
 	localCtx, cancel := context.WithCancel(session.Context)
@@ -59,6 +161,7 @@ func getOrgRepositories(session *Session) {
 	}
 
 }
+
 func GetRepositories(session *Session) {
 	localCtx, cancel := context.WithCancel(session.Context)
 	defer cancel()
@@ -219,6 +322,19 @@ func GetRepository(session *Session, id int64) (*github.Repository, error) {
 	client := session.GetClient()
 	defer session.FreeClient(client)
 
+	if len(*session.Options.App) > 0 {
+		repo, resp, err := client.Repositories.GetByID(session.Context, id)
+
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.Rate.Remaining <= 1 {
+			session.Log.Warn("Token %s[..] rate limited. Reset at %s", client.Token[:10], resp.Rate.Reset)
+			client.RateLimitedUntil = resp.Rate.Reset.Time
+		}
+		return repo, nil
+	}
 	repo, resp, err := client.Repositories.GetByID(session.Context, id)
 
 	if err != nil {
@@ -229,6 +345,5 @@ func GetRepository(session *Session, id int64) (*github.Repository, error) {
 		session.Log.Warn("Token %s[..] rate limited. Reset at %s", client.Token[:10], resp.Rate.Reset)
 		client.RateLimitedUntil = resp.Rate.Reset.Time
 	}
-
 	return repo, nil
 }

@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
-	"github.com/google/go-github/github"
+	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/google/go-github/v45/github"
 	"golang.org/x/oauth2"
 )
 
@@ -58,7 +62,67 @@ func (s *Session) InitSignatures() {
 }
 
 func (s *Session) InitGitHubClients() {
-	if len(*s.Options.Local) <= 0 {
+	if len(*s.Options.App) >= 0 {
+		chanSize := *s.Options.Threads * (len(s.Config.GitHubAccessTokens) + 1)
+		s.Clients = make(chan *GitHubClientWrapper, chanSize)
+		s.ExhaustedClients = make(chan *GitHubClientWrapper, chanSize)
+
+		const gitHost = "https://api.github.com"
+
+		privatePem, err := ioutil.ReadFile("/Users/jasonroberts/workspaces/shhgit/private-key.pem")
+		if err != nil {
+			log.Fatalf("failed to read pem: %v", err)
+		}
+
+		itr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, 113101, privatePem)
+		if err != nil {
+			log.Fatalf("faild to create app transport: %v\n", err)
+		}
+		itr.BaseURL = gitHost
+
+		//create git client with app transport
+		client, err := github.NewEnterpriseClient(
+			gitHost,
+			gitHost,
+			&http.Client{
+				Transport: itr,
+				Timeout:   time.Second * 30,
+			})
+
+		if err != nil {
+			log.Fatalf("faild to create git client for app: %v\n", err)
+		}
+
+		installations, _, err := client.Apps.ListInstallations(context.Background(), &github.ListOptions{})
+		if err != nil {
+			log.Fatalf("failed to list installations: %v\n", err)
+		}
+
+		for _, val := range installations {
+			//val.
+			installID := val.GetID()
+			token, _, err := client.Apps.CreateInstallationToken(
+				context.Background(),
+				installID, &github.InstallationTokenOptions{})
+			if err != nil {
+				log.Fatalf("failed to create installation token: %v\n", err)
+			}
+			ts := oauth2.StaticTokenSource(
+				&oauth2.Token{AccessToken: token.GetToken()},
+			)
+			oAuthClient := oauth2.NewClient(context.Background(), ts)
+
+			//create new git hub client with accessToken
+			apiClient, err := github.NewEnterpriseClient(gitHost, gitHost, oAuthClient)
+			if err != nil {
+				log.Fatalf("failed to create new git client with token: %v\n", err)
+			}
+			for i := 0; i <= *s.Options.Threads; i++ {
+				s.Clients <- &GitHubClientWrapper{apiClient, token.GetToken(), time.Now().Add(-1 * time.Second)}
+			}
+		}
+
+	} else if len(*s.Options.Local) <= 0 {
 		chanSize := *s.Options.Threads * (len(s.Config.GitHubAccessTokens) + 1)
 		s.Clients = make(chan *GitHubClientWrapper, chanSize)
 		s.ExhaustedClients = make(chan *GitHubClientWrapper, chanSize)
